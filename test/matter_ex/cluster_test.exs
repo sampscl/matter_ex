@@ -51,6 +51,7 @@ defmodule MatterEx.ClusterTest do
   alias MatterEx.Cluster.SmokeCOAlarm
   alias MatterEx.Cluster.SoftwareDiagnostics
   alias MatterEx.Cluster.Switch
+  alias MatterEx.Cluster.TemperatureControl
   alias MatterEx.Cluster.TemperatureMeasurement
   alias MatterEx.Cluster.Thermostat
   alias MatterEx.Cluster.TimeFormatLocalization
@@ -94,6 +95,12 @@ defmodule MatterEx.ClusterTest do
     use MatterEx.Cluster, :temperature_measurement
   end
 
+  defmodule Friendly.TemperatureControl do
+    use MatterEx.Cluster, :temperature_control
+
+    command(:set_temperature)
+  end
+
   defmodule Friendly.DoorLock do
     use MatterEx.Cluster, :door_lock
   end
@@ -116,6 +123,7 @@ defmodule MatterEx.ClusterTest do
 
       assert {:on_off, 0x0006} in known_clusters
       assert {:basic_information, 0x0028} in known_clusters
+      assert {:temperature_control, 0x0056} in known_clusters
       assert {:temperature_measurement, 0x0402} in known_clusters
       assert {:pm25_concentration_measurement, 0x042A} in known_clusters
       assert known_clusters == Enum.sort_by(known_clusters, &elem(&1, 0))
@@ -124,6 +132,7 @@ defmodule MatterEx.ClusterTest do
     test "friendly use DSL resolves built-in cluster IDs" do
       assert Friendly.OnOff.cluster_id() == 0x0006
       assert Friendly.BasicInformation.cluster_id() == 0x0028
+      assert Friendly.TemperatureControl.cluster_id() == 0x0056
       assert Friendly.TemperatureMeasurement.cluster_id() == 0x0402
       assert Friendly.DoorLock.cluster_id() == 0x0101
       assert Friendly.PM25ConcentrationMeasurement.cluster_id() == 0x042A
@@ -346,6 +355,36 @@ defmodule MatterEx.ClusterTest do
 
     test "TemperatureMeasurement has no commands" do
       assert TemperatureMeasurement.command_defs() == []
+    end
+
+    test "TemperatureControl cluster_id and name" do
+      assert TemperatureControl.cluster_id() == 0x0056
+      assert TemperatureControl.cluster_name() == :temperature_control
+      assert MatterEx.Cluster.module_for_name(:temperature_control) == TemperatureControl
+      assert MatterEx.Cluster.module_for_id(0x0056) == TemperatureControl
+    end
+
+    test "TemperatureControl attribute_defs" do
+      defs = TemperatureControl.attribute_defs()
+      friendly_defs = Friendly.TemperatureControl.attribute_defs()
+      assert length(defs) == 10
+
+      assert Enum.find(defs, &(&1.name == :temperature_setpoint)) ==
+               Enum.find(friendly_defs, &(&1.name == :temperature_setpoint))
+
+      assert Enum.find(defs, &(&1.name == :feature_map)).default == 0x05
+      assert Enum.find(defs, &(&1.name == :cluster_revision)).default == 1
+      assert Enum.all?(defs, &(!&1.writable))
+    end
+
+    test "TemperatureControl command_defs" do
+      assert [%{id: 0x00, name: :set_temperature, params: [target_temperature: :int16]}] =
+               TemperatureControl.command_defs()
+
+      assert [%{id: 0x00, name: :set_temperature}] = Friendly.TemperatureControl.command_defs()
+
+      defs = TemperatureControl.attribute_defs()
+      assert Enum.find(defs, &(&1.name == :accepted_command_list)).default == [0x00]
     end
 
     test "BooleanState cluster_id and name" do
@@ -814,6 +853,75 @@ defmodule MatterEx.ClusterTest do
     test "invoke unknown command fails", %{name: name} do
       assert {:error, :unsupported_command} =
                GenServer.call(name, {:invoke_command, :bogus, %{}})
+    end
+  end
+
+  # ── TemperatureControl GenServer ───────────────────────────────
+
+  describe "TemperatureControl GenServer" do
+    setup do
+      name = :"temperature_control_test_#{System.unique_integer([:positive])}"
+      {:ok, pid} = TemperatureControl.start_link(name: name)
+      %{pid: pid, name: name}
+    end
+
+    test "exposes numeric temperature defaults as read-only", %{name: name} do
+      assert {:ok, 2000} = GenServer.call(name, {:read_attribute, :temperature_setpoint})
+      assert {:ok, -5000} = GenServer.call(name, {:read_attribute, :min_temperature})
+      assert {:ok, 12500} = GenServer.call(name, {:read_attribute, :max_temperature})
+      assert {:ok, 50} = GenServer.call(name, {:read_attribute, :step})
+
+      for attribute <- [:temperature_setpoint, :min_temperature, :max_temperature, :step] do
+        assert {:error, :unsupported_write} =
+                 GenServer.call(name, {:write_attribute, attribute, 0})
+      end
+    end
+
+    test "sets on-grid temperatures including both boundaries", %{name: name} do
+      assert {:ok, nil} =
+               GenServer.call(
+                 name,
+                 {:invoke_command, :set_temperature, %{target_temperature: -5000}}
+               )
+
+      assert {:ok, -5000} = GenServer.call(name, {:read_attribute, :temperature_setpoint})
+
+      assert {:ok, nil} =
+               GenServer.call(
+                 name,
+                 {:invoke_command, :set_temperature, %{target_temperature: 12500}}
+               )
+
+      assert {:ok, 12500} = GenServer.call(name, {:read_attribute, :temperature_setpoint})
+      assert 2 = GenServer.call(name, :read_data_version)
+    end
+
+    test "rejects out-of-range, off-step, missing, and non-integer targets", %{name: name} do
+      invalid_params = [
+        %{target_temperature: -5050},
+        %{target_temperature: 12550},
+        %{target_temperature: 2025},
+        %{},
+        %{target_temperature: "2000"}
+      ]
+
+      for params <- invalid_params do
+        assert {:error, :constraint_error} =
+                 GenServer.call(name, {:invoke_command, :set_temperature, params})
+      end
+
+      assert {:ok, 2000} = GenServer.call(name, {:read_attribute, :temperature_setpoint})
+      assert 0 = GenServer.call(name, :read_data_version)
+    end
+
+    test "setting the existing target is a no-op", %{name: name} do
+      assert {:ok, nil} =
+               GenServer.call(
+                 name,
+                 {:invoke_command, :set_temperature, %{target_temperature: 2000}}
+               )
+
+      assert 0 = GenServer.call(name, :read_data_version)
     end
   end
 
