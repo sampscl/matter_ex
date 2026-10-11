@@ -8,7 +8,7 @@
 A [Matter](https://csa-iot.org/all-solutions/matter/) smart home protocol stack written in pure Elixir.
 
 MatterEx implements the Matter application protocol from the ground up — TLV encoding,
-secure sessions (PASE and CASE), the Interaction Model, mDNS discovery, and 60 clusters —
+secure sessions (PASE and CASE), the Interaction Model, mDNS discovery, and 61 clusters —
 with zero external dependencies beyond OTP. It interoperates with
 [chip-tool](https://github.com/project-chip/connectedhomeip/tree/master/examples/chip-tool),
 the Matter reference controller, and Apple Home on iOS/macOS developer mode. The
@@ -25,7 +25,7 @@ and Apple-style chunked wildcard subscriptions.
 - **Controller interop** — commission with chip-tool and Apple Home, establish CASE sessions, read/write attributes, invoke commands, subscribe
 - **Pure functional core** — PASE, CASE, and MessageHandler are stateless; GenServers are thin wrappers
 - **1000+ unit tests** and 28 chip-tool integration tests
-- **60 cluster implementations** covering lighting, HVAC, sensors, locks, media, and more
+- **61 cluster implementations** covering lighting, HVAC, sensors, locks, media, and more
 
 ## Quick Start
 
@@ -288,7 +288,7 @@ writable-attribute rules that a Matter controller write request would use.
 
 ## Clusters
 
-60 clusters organized by function:
+61 clusters organized by function:
 
 **Lighting & Control** —
 OnOff, LevelControl, ColorControl, FanControl, WindowCovering, PumpConfigurationAndControl
@@ -322,7 +322,12 @@ LocalizationConfiguration, TimeFormatLocalization, UnitLocalization, TimeSynchro
 
 **Media** — MediaPlayback, ContentLauncher, AudioOutput
 
-**Appliances** — LaundryWasherControls, DishwasherAlarm, RefrigeratorAlarm
+**Appliances** — TemperatureControl, LaundryWasherControls, DishwasherAlarm, RefrigeratorAlarm
+
+The built-in `TemperatureControl` cluster uses Matter's numeric temperature and
+step features (`TN + STEP`). Matter requires endpoints to choose either numeric
+temperature control or vendor-specific named temperature levels, so the mutually
+exclusive `TL` profile is not advertised by this built-in implementation.
 
 **ICD** — ICDManagement
 
