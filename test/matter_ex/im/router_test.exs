@@ -13,12 +13,56 @@ defmodule MatterEx.IM.RouterTest do
 
     endpoint 1, device_type: 0x0100 do
       cluster(MatterEx.Cluster.OnOff)
+      cluster(MatterEx.Cluster.TemperatureControl)
     end
   end
 
   setup do
     start_supervised!(FabricDevice)
     :ok
+  end
+
+  describe "TemperatureControl invokes" do
+    test "decodes target temperature" do
+      path = %{endpoint: 1, cluster: 0x0056, command: 0x00}
+      context = %{auth_mode: :pase, subject: 0, fabric_index: 0}
+
+      response =
+        Router.handle(
+          FabricDevice,
+          :invoke_request,
+          %IM.InvokeRequest{invoke_requests: [%{path: path, fields: %{0 => 2500}}]},
+          context
+        )
+
+      assert [{:status, %{status: 0}}] = response.invoke_responses
+
+      temperature_control = FabricDevice.__process_name__(1, :temperature_control)
+
+      assert {:ok, 2500} =
+               GenServer.call(temperature_control, {:read_attribute, :temperature_setpoint})
+    end
+
+    test "maps constraint errors" do
+      path = %{endpoint: 1, cluster: 0x0056, command: 0x00}
+      context = %{auth_mode: :pase, subject: 0, fabric_index: 0}
+
+      response =
+        Router.handle(
+          FabricDevice,
+          :invoke_request,
+          %IM.InvokeRequest{invoke_requests: [%{path: path, fields: %{0 => 2525}}]},
+          context
+        )
+
+      assert [{:status, %{status: status}}] = response.invoke_responses
+      assert status == MatterEx.IM.Status.status_code(:constraint_error)
+
+      temperature_control = FabricDevice.__process_name__(1, :temperature_control)
+
+      assert {:ok, 2000} =
+               GenServer.call(temperature_control, {:read_attribute, :temperature_setpoint})
+    end
   end
 
   # ── Fabric-Scoped Attribute Tests ──────────────────────────────
